@@ -33,8 +33,13 @@
 
 void        print_usage(char argv[0]);
 int         connect_server(char *ip, int port, char *buf, int recv, int *flag);
-int         mac_sn_cJSON_pkg(char *ptr_mac, char *ptr_sn, int send, int recv, char *read_type, char *json_str);
+int         mac_sn_cJSON_pkg(char *ptr_mac, char *ptr_sn, int send, int recv, 
+                            char *read_type, char *json_str);
 static int  callback(void *NotUsed, int argc, char **argv, char **azColName);
 int         set_database(char *ptr_mac, char *ptr_sn);
+int         look_record_database(char *ptr_mac, char *ptr_sn);
+int         print_record_mac(void *params,int n_column,char **column_value,char **column_name);
+int         print_record_sn(void *params, int n_column, char **column_value, 
+                             char **column_name);
 
 #endif
