@@ -26,13 +26,15 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include "cJSON.h"
+#include "eeprom_protoold.h"
 
 #define BUFSIZE     16
 #define MAC_SIZE    6
+#define MAC_BYTES   7
+#define SN_BYTES    11
 #define SN_SIZE     32
 #define MAC_OFFSET  0
 #define SN_OFFSET   40
-#define EEPROM_FILE "/sys/bus/i2c/devices/0-0050/eeprom"
 
 #define ERR_CRE_SOCK    2
 #define ERR_W_SN        3
@@ -51,8 +53,8 @@ static int     write_sn(char *sn_value);
 static int     write_mac(char *mac_value);
 static int     read_sn(char *str);
 static int     read_mac(char *str);
-static int     eeprom_write(char *str,int offset);
-static int     eeprom_read(char *buf,int length,int type);
+//static int     eeprom_write(char *str,int offset);
+//static int     eeprom_read(char *buf,int length,int type);
 static int     mac_sn_cJSON_pkg(char *mac_buf,char *sn_buf,char *json_str);
 
 #endif
