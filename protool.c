@@ -72,11 +72,14 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    if ( (send==1) && ((ptr_mac==NULL)&&(ptr_sn == NULL)) )
+    if ((send==1) && ((ptr_mac==NULL)&&(ptr_sn == NULL)))
     {
         printf("option '-s' must be used with option '-M' or '-S'\n");
         return -1;
     }
+
+    /*look database record */
+    look_record_database(ptr_mac,ptr_sn);
 
 
     /*pack cmd data as JSON format */
@@ -281,7 +284,7 @@ int     set_database(char *ptr_mac, char *ptr_sn)
     char        *zErrMsg = NULL;
     sqlite3     *db = NULL;
     char        *sql = NULL;
-    char        *sql_judge = NULL;
+    char        *sql_judge_table_exist = NULL;
     char        sql_buf[128];
     int         is_table_exist = 0;
     struct tm   *time_now = NULL;
@@ -310,9 +313,9 @@ int     set_database(char *ptr_mac, char *ptr_sn)
             printf("open database protool.db success!\n");
         }
 
-        sql_judge = "SELECT * FROM RECORD_PROTOOL;";
+        sql_judge_table_exist = "SELECT * FROM RECORD_PROTOOL;";
 
-        rc = sqlite3_exec(db, sql_judge, NULL, NULL, &zErrMsg);
+        rc = sqlite3_exec(db, sql_judge_table_exist, NULL, NULL, &zErrMsg);
 
         if (rc != SQLITE_OK)
         {
@@ -369,6 +372,113 @@ static  int     callback(void *NotUsed, int argc, char **argv, char **azColName)
         printf("%s = %s\n", azColName[i], argv[i]?argv[i]:NULL);
     }
     printf("\n");
+
+    return 0;
+}
+
+int     look_record_database(char *ptr_mac, char *ptr_sn)
+{
+    int         rc = -1;
+    char        *zErrMsg = NULL;
+    sqlite3     *db = NULL;
+    char        *sql = NULL;
+
+    rc = sqlite3_open("protool.db", &db);
+    if (rc != SQLITE_OK)
+    {
+        printf("open protool.db failure: %s\n", sqlite3_errmsg(db));
+    }
+    else
+    {
+        printf("open database protool.db success!\n");
+    }
+
+    if(ptr_mac != NULL)
+    {
+        char    *sql_judge_mac = NULL;
+
+        sql_judge_mac = "select MAC from RECORD_PROTOOL;";
+        rc = sqlite3_exec(db, sql_judge_mac, print_record_mac, ptr_mac, &zErrMsg);
+        if (rc != SQLITE_OK)
+        {
+            printf("SQL error:%s\n", zErrMsg);
+            sqlite3_free(zErrMsg);
+        }
+    }
+
+    if(ptr_sn != NULL)
+    {
+        char    *sql_judge_sn = NULL;
+
+        sql_judge_sn = "select SN from RECORD_PROTOOL;";
+        rc = sqlite3_exec(db, sql_judge_sn, print_record_sn, ptr_sn, &zErrMsg);
+        if (rc != SQLITE_OK)
+        {
+            printf("SQL error:%s\n", zErrMsg);
+            sqlite3_free(zErrMsg);
+        }
+    }
+}
+
+int print_record_mac(void *params, int n_column, char **column_value, char **column_name)
+{
+    int i;
+    int rv = -1;
+    int flag = 0;
+
+    //printf("\t%s\n",(char *)params);
+
+    printf("n_column = %d\n",n_column);
+    for (i=0; i<n_column; i++)
+    {
+        //printf("\t%s\n",column_name[i]);
+
+        if ((rv = strncmp(params, column_value[i], strlen(params))) == 0)
+        {
+        //    printf("\t%s\n",column_value[i]);
+            flag = 1;
+            break;
+        }
+        //printf("\t%s\n",column_value[i]);
+    }
+    if (flag == 1)
+    {
+        printf("error,the MAC was used!\n");
+        printf("program exit!\n");
+
+        exit(0);
+    }
+
+    return 0;
+}
+
+int print_record_sn(void *params, int n_column, char **column_value, char **column_name)
+{
+    int i;
+    int rv = -1;
+    int flag = 0;
+
+    //printf("\t%s\n",(char *)params);
+
+    for(i=0; i<n_column; i++)
+    {
+      //  printf("\t%s\n",column_name[i]);
+
+        if ((rv = strncmp(params, column_value[i], strlen(params))) == 0)
+        {
+        //    printf("\t%s\n",column_value[i]);
+            flag = 1;
+            break;
+        }
+        //printf("\t%s\n",column_value[i]);
+    }
+    if (flag == 1)
+    {
+        printf("error,the sn was used!\n");
+        printf("program exit!\n");
+
+        exit(0);
+    }
 
     return 0;
 }
