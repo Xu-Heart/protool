@@ -13,37 +13,118 @@
  ************************************************************************************/
 
 #include"protoold.h"
+#include "eeprom_protoold.h"
 
 static int  g_stop = 0;
 
 int main(int argc, char **argv)
 {
 	int                  rv = -1;
-	socklen_t            len;
 	int                  port = 0;
 	int                  ch;
     int                  s_cre_sock = -1;
+    int                  read = 0;
+    int                  write = 0;
+    int                  log_fd = -1;
+    char                 *ptr_mac = NULL;
+    char                 *ptr_sn = NULL;
+	socklen_t            len;
+    char                 *optstring = "p:wr:M:S:";
+    unsigned char        buf[6];
+    char                 *p = NULL;
+    char                 *read_t = NULL;
+    char                 r_buf[16];
+    char                 r_str_mac[20];
     struct option        opts[] = {
 		{"port", required_argument, NULL, 'p'},
+		{"read", required_argument, NULL, 'r'},
+		{"write",no_argument, NULL, 'w'},
+		{"MAC", required_argument, NULL, 'M'},
+		{"SN", required_argument, NULL, 'S'},
 		{"help", no_argument, NULL, 'h'},
 		{NULL, 0, NULL, 0}
 	};
 
-	while ((ch=getopt_long(argc, argv, "p:h", opts, NULL)) != -1) 
+	while ((ch=getopt_long(argc, argv, optstring, opts, NULL)) != -1) 
 	{
 		switch(ch)
 		{
-			case 'p' : port = atoi(optarg); break;
+            case 'p' : port = atoi(optarg); break;
+            case 'r' : {read = 1; read_t = optarg; }; break;
+            case 'w' : write = 1; break;
+            case 'M' : ptr_mac = optarg; break;
+            case 'S' : ptr_sn = optarg; break;
 			case 'h' : print_usage(argv[0]); break;
             default  : break;
 		}
 	}
 
-	if ( !port )
+	if ((!port) && (!write) && (!read))
 	{
 		print_usage(argv[0]);
 		return -1;
 	}
+
+    if(port == 0)
+    {
+        if(read == 1)
+        {
+            if((strncmp("mac", read_t, 3) == 0))
+            {
+                eeprom_read(r_buf, MAC_BYTES, MAC_OFFSET);
+                snprintf(r_str_mac, 18, "%02x:%02x:%02x:%02x:%02x:%02x", r_buf[0], 
+                        r_buf[1], r_buf[2], r_buf[3], r_buf[4], r_buf[5]);
+                printf("the MAC: %s\n", r_str_mac);
+            }
+
+            if((strncmp("sn", read_t, 2)) == 0) 
+            {
+                eeprom_read(r_buf, SN_BYTES, SN_OFFSET);
+                printf("the SN: %s\n", r_buf);
+            }
+        }
+        
+        if (write == 1)
+        {
+            if (ptr_mac != NULL)
+            {
+                int     i;
+                
+                memset(buf, 0, sizeof(buf));
+                //printf("%s\n",ptr_mac);
+                //sscanf(ptr_mac,"%02x:%02x:%02x:%02x:%02X:%02X",(unsigned int)&buf[0],&buf[1],&buf[2],&buf[3],&buf[4],&buf[5]);
+                for (i=0; i<6; i++)
+                {
+                    buf[i] = strtol(ptr_mac, &p, 16);
+                    printf("%#x ", buf[i]);
+                    ptr_mac += 3;
+                }
+
+                eeprom_write(buf, MAC_OFFSET);
+            }
+
+            if (ptr_sn != NULL)
+            {
+                eeprom_write(ptr_sn, SN_OFFSET);
+            }
+        }
+
+        return 0;
+    }
+
+    /* if the program as the socket server,run in background */
+    log_fd = open("protoold.log",O_CREAT|O_RDWR,0666);
+    if(log_fd > 0)
+    {
+        dup2(log_fd,STDOUT_FILENO);
+        dup2(log_fd,STDERR_FILENO);
+        daemon(1,1);
+    }
+    else
+    {
+        printf("open file failure:%s\n",strerror(errno));
+        return -3;
+    }
 
     if ((s_cre_sock=server_create_sock(port, len)) < 0)
     {
@@ -157,6 +238,10 @@ static void print_usage(char *progname)
 {
 	printf("%s usage: \n", progname);
 	printf("-p(--port): sepcify server listen port.\n");
+	printf("-w(--write): write MAC or SN to eeprom.\n");
+	printf("-r(--port): read MAC or SN from eeprom.\n");
+	printf("-M(--MAC): sepcify the MAC that write.\n");
+	printf("-S(--SN): sepcify the SN that write.\n");
 	printf("-h(--Help): print this help information.\n");
 
 	return ;
@@ -323,6 +408,7 @@ err1:
     return 0;
 }
 
+/* the function write mac to eeprom */
 static int write_mac(char *mac_value)
 {
     int             i = 0;
@@ -370,31 +456,6 @@ static int write_sn(char *sn_value)
     return 0;
 }
 
-static int eeprom_write(char *str, int offset)
-{
-    int     fd = -1;
-    int     rv = -1;
-
-    if ((fd  = (open(EEPROM_FILE,O_RDWR,0666))) < 0)
-    {
-        printf("open eeprom file failure:%s\n", strerror(errno));
-        return -1;
-    }
-
-    lseek(fd,offset,SEEK_SET);
-
-    if ((rv = write(fd, str, strlen(str))) < 0)
-    {
-        printf("write sn to eeprom failure!:%s\n",strerror(errno));
-        close(fd);
-        return -2;
-    }
-
-    printf("debug:write ok\n");
-    close(fd);
-    return 0;
-}
-
 /* this function read SN from eeprom */
 static int read_sn(char *sn)
 {
@@ -424,52 +485,6 @@ static int read_mac(char *mac)
         return -ERR_EEPROM_R;
     }
 
-    return 0;
-}
-
-int eeprom_read(char *buf, int length, int type)
-{
-    int             fd = -1;
-    int             rv = -1;
-    int             i;
-
-    printf("length  = %d\n", length);
-
-    if ((fd  = (open(EEPROM_FILE, O_RDWR, 0666))) < 0)
-    {
-        printf("open eeprom file failure:%s\n", strerror(errno));
-        return -1;
-    }
-
-    lseek(fd, type, SEEK_SET);
-
-    printf("debug:eerpom read 1\n");
-    memset(buf,0,sizeof(buf));
-    printf("debug:eeprom read 2\n");
-
-    if ((rv = read(fd, buf, length) < 0))
-    {
-        printf("read from eeprom failure!:%s\n", strerror(errno));
-        close(fd);
-        return -2;
-    }
-
-    if (length == 11)
-    {
-        buf[10] = '\0';
-        printf("read sn:%s\n", buf);
-    }
-    else if (length == 7)
-    {
-        printf("read mac: ");
-        for(i = 0; i < 6; i++)
-        {
-            printf("%02x ", buf[i]);
-        }
-        buf[6] = '\0';
-    }
-
-    close(fd);
     return 0;
 }
 
