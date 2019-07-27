@@ -32,7 +32,7 @@ int eeprom_write(char *str,int offset)
         close(fd);
         return -2;
     }
-    printf("debug:write ok\n");
+    printf("write ok\n");
 
     close(fd);
     return 0;
