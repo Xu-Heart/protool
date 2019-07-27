@@ -22,7 +22,6 @@
 #include <arpa/inet.h>
 #include <stdlib.h>
 #include <getopt.h>
-#include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include "cJSON.h"
@@ -45,6 +44,8 @@
 #define ERR_EEPROM_R    8
 
 #define SEND_CLI     20 
+#define PATHNAME_SN     "/etc/eeprom/SN"
+#define PATHNAME_MAC    "/etc/eeprom/MAC"
 
 static int     server_create_sock (int port,socklen_t len);
 static void    print_usage(char *progname);
@@ -53,8 +54,7 @@ static int     write_sn(char *sn_value);
 static int     write_mac(char *mac_value);
 static int     read_sn(char *str);
 static int     read_mac(char *str);
-//static int     eeprom_write(char *str,int offset);
-//static int     eeprom_read(char *buf,int length,int type);
+int            update_file(char *file, char *vlaue);
 static int     mac_sn_cJSON_pkg(char *mac_buf,char *sn_buf,char *json_str);
 
 #endif
