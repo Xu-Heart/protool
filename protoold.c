@@ -13,7 +13,6 @@
  ************************************************************************************/
 
 #include"protoold.h"
-#include "eeprom_protoold.h"
 
 static int  g_stop = 0;
 
@@ -27,14 +26,13 @@ int main(int argc, char **argv)
     int                  write = 0;
     int                  log_fd = -1;
     char                 *ptr_mac = NULL;
+    char                 *ptr_mac_backup = NULL;
     char                 *ptr_sn = NULL;
 	socklen_t            len;
     char                 *optstring = "p:wr:M:S:";
-    unsigned char        buf[6];
-    char                 *p = NULL;
     char                 *read_t = NULL;
-    char                 r_buf[16];
-    char                 r_str_mac[20];
+    char                 r_buf[20];
+
     struct option        opts[] = {
 		{"port", required_argument, NULL, 'p'},
 		{"read", required_argument, NULL, 'r'},
@@ -59,6 +57,8 @@ int main(int argc, char **argv)
 		}
 	}
 
+    ptr_mac_backup = ptr_mac;
+
 	if ((!port) && (!write) && (!read))
 	{
 		print_usage(argv[0]);
@@ -71,16 +71,22 @@ int main(int argc, char **argv)
         {
             if((strncmp("mac", read_t, 3) == 0))
             {
-                eeprom_read(r_buf, MAC_BYTES, MAC_OFFSET);
-                snprintf(r_str_mac, 18, "%02x:%02x:%02x:%02x:%02x:%02x", r_buf[0], 
-                        r_buf[1], r_buf[2], r_buf[3], r_buf[4], r_buf[5]);
-                printf("the MAC: %s\n", r_str_mac);
+                if((read_mac(r_buf)) != 0)
+                {
+                    printf("read mac failure!\n");
+                    return -1;
+                }
+                printf("read mac OK!\nmac: %s\n", r_buf);
             }
 
             if((strncmp("sn", read_t, 2)) == 0) 
             {
-                eeprom_read(r_buf, SN_BYTES, SN_OFFSET);
-                printf("the SN: %s\n", r_buf);
+                if((read_sn(r_buf)) != 0)
+                {
+                    printf("read sn failure!\n");
+                    return -2;
+                }
+                printf("sn: %s\n", r_buf);
             }
         }
         
@@ -88,41 +94,37 @@ int main(int argc, char **argv)
         {
             if (ptr_mac != NULL)
             {
-                int     i;
-                
-                memset(buf, 0, sizeof(buf));
-                //printf("%s\n",ptr_mac);
-                //sscanf(ptr_mac,"%02x:%02x:%02x:%02x:%02X:%02X",(unsigned int)&buf[0],&buf[1],&buf[2],&buf[3],&buf[4],&buf[5]);
-                for (i=0; i<6; i++)
+                if((write_mac(ptr_mac)) != 0)
                 {
-                    buf[i] = strtol(ptr_mac, &p, 16);
-                    printf("%#x ", buf[i]);
-                    ptr_mac += 3;
+                    printf("write mac failure!\n");
+                    return -3;
                 }
-
-                eeprom_write(buf, MAC_OFFSET);
             }
 
             if (ptr_sn != NULL)
             {
-                eeprom_write(ptr_sn, SN_OFFSET);
+                if((write_sn(ptr_sn)) != 0)
+                {
+                    printf("write sn failure!\n");
+                    return -4;
+                }
             }
         }
-
         return 0;
     }
 
     /* if the program as the socket server,run in background */
-    log_fd = open("protoold.log",O_CREAT|O_RDWR,0666);
-    if(log_fd > 0)
+    log_fd = open("protoold.log",O_RDWR|O_CREAT,0666);
+
+    if (log_fd > 0)
     {
-        dup2(log_fd,STDOUT_FILENO);
-        dup2(log_fd,STDERR_FILENO);
+        dup2(log_fd, STDOUT_FILENO);
+        dup2(log_fd, STDERR_FILENO);
         daemon(1,1);
     }
     else
     {
-        printf("open file failure:%s\n",strerror(errno));
+        printf("open file failure: %s\n", strerror(errno));
         return -3;
     }
 
@@ -133,7 +135,6 @@ int main(int argc, char **argv)
 
     return 0;
 }
-
 
 static int server_create_sock(int port, socklen_t len)
 {
@@ -342,7 +343,6 @@ static int mac_sn_cJSON_parse(char *str, char *json, int size)
         int     rv_sn = -1;
         int     json_rv = -1;
 
-
         printf("ptr_read_type = %s\n", ptr_read_type);
 
         memset(r_sn_buf, 0, sizeof(r_sn_buf));
@@ -368,14 +368,9 @@ static int mac_sn_cJSON_parse(char *str, char *json, int size)
             /* read MAC from eeprom */
             if (strncmp(ptr_read_type, "mac", strlen(ptr_read_type)) == 0)
             {
-                if ((rv_mac = read_mac(r_mac_buf)) == 0)
+                if ((rv_mac = read_mac(str_mac)) == 0)
                 {
-                    printf("\nread mac OK!\n");
-
-                    /*convert hex MAC to string MAC */ 
-                    snprintf(str_mac, 18, "%02x:%02x:%02x:%02x:%02x:%02x", 
-                             r_mac_buf[0],r_mac_buf[1], r_mac_buf[2],
-                             r_mac_buf[3], r_mac_buf[4], r_mac_buf[5]);
+                    printf("\nread mac OK!mac: %s\n", str_mac);
                 }
                 else if (rv_mac < 0)
                 {
@@ -416,26 +411,31 @@ static int write_mac(char *mac_value)
     int             fd = -1;
     int             rv = -1;
     int             w_mac_rv = -1;
+    char            *mac_value_bake = NULL;
     char            *ptr = NULL;
     unsigned char   buf[MAC_SIZE];
 
-    printf("at write mac\n");
-    printf("mac_value: %s\n", mac_value);
+    mac_value_bake = mac_value;
+    //printf("mac_value_bake: %s\n", mac_value_bake);
       
     for (i=0; i<6; i++)
     {
         buf[i] = strtol(mac_value, &ptr, 16);
-        printf("%#x ", buf[i]);
         mac_value += 3;
     }
-    printf("\n");
-    printf("debug:%02x\n", buf[0]);
+    //printf("debug:%02x\n", buf[0]);
     
     if ((w_mac_rv = eeprom_write(buf,MAC_OFFSET)) < 0)
     {
         return -ERR_EEPROM_W;
     }
     printf("write mac to eeprom success!\n");
+
+    /*update the file "/etc/eeprom/MAC" */
+    if ((update_file(PATHNAME_MAC, mac_value_bake)) != 0)
+    {
+        printf("update file failure!\n");
+    }
 
     return 0;
 }
@@ -453,6 +453,12 @@ static int write_sn(char *sn_value)
     }
     printf("write sn to eeprom success!\n");
 
+    /* update the file '/etc/eeprom/SN' */
+    if ((update_file(PATHNAME_SN, sn_value)) != 0)
+    {
+        printf("update file '/etc/eeprom/sn' failure!\n");
+    }
+
     return 0;
 }
 
@@ -461,8 +467,6 @@ static int read_sn(char *sn)
 {
     int         sn_length = 11;
     int         rv = -1;
-
-    printf("at read_sn\n");
 
     if ((rv = eeprom_read(sn, sn_length, SN_OFFSET)) < 0)
     {
@@ -477,13 +481,16 @@ static int read_mac(char *mac)
 {
     int         mac_length = 7;
     int         rv = -1;
+    char        buf[7];
 
-    printf("at read mac: \n");
-
-    if ((rv = eeprom_read(mac, mac_length, MAC_OFFSET)) < 0)
+    if ((rv = eeprom_read(buf, mac_length, MAC_OFFSET)) < 0)
     {
         return -ERR_EEPROM_R;
     }
+
+    /* convert hex MAC to string MAC */
+    snprintf(mac, 18, "%02x:%02x:%02x:%02x:%02x:%02x",
+            buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]);
 
     return 0;
 }
@@ -540,4 +547,31 @@ err1:
     cJSON_Delete(root);
     return -3;
 
+}
+
+int update_file(char *file, char *value)
+{
+    int     fd = -1;
+
+    //printf("file: %s\n", file);
+    //printf("value: %s\n", value);
+
+    fd = open(file, O_RDWR | O_CREAT | O_TRUNC, 0666);
+
+    if(fd < 0)
+    {
+        printf("open [%s] failure: %s\n", file, strerror(errno));
+        return -1;
+    }
+
+    lseek(fd, 0, SEEK_SET);
+
+    if((write(fd, value, strlen(value))) <= 0)
+    {
+        printf("write data to file '%s' failure: %s\n", file, strerror(errno));
+        return -2;
+    }
+    printf("update the file '%s' successful!\n", file);
+
+    return 0;
 }
