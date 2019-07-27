@@ -40,6 +40,6 @@ int         set_database(char *ptr_mac, char *ptr_sn);
 int         look_record_database(char *ptr_mac, char *ptr_sn);
 int         print_record_mac(void *params,int n_column,char **column_value,char **column_name);
 int         print_record_sn(void *params, int n_column, char **column_value, 
-                             char **column_name);
+                            char **column_name);
 
 #endif
