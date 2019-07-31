@@ -10,17 +10,16 @@
  *      ChangeLog:  1, Release initial version on "2019年07月05日 19时13分53秒"
  *                 
  ********************************************************************************/
-
 #include "protool.h"
 
 static struct option opts[] = {
     {"ipaddr", required_argument, NULL, 'i'},
     {"send", no_argument, NULL, 's'},
-    {"recv", required_argument, NULL, 'r'},
+    {"recv", no_argument, NULL, 'r'},
     {"port", required_argument, NULL, 'p'},
-    {"MAC", optional_argument, NULL, 'M'},
-    { "SN", optional_argument, NULL, 'S' },
-    { "help", no_argument, NULL, 'h'},
+    {"MAC", required_argument, NULL, 'M'},
+    {"SN", required_argument, NULL, 'S' },
+    {"help", no_argument, NULL, 'h'},
     {NULL, 0, NULL, 0}
 };
 
@@ -28,112 +27,181 @@ int main(int argc, char **argv)
 {
     int         ch = -1;
     int         port = -1;
-    int         send = 0;
-    int         recv = 0;
     int         rv = -1;
-    int         pkg_rv = -1;
     int         flag = 0;
-    int         rc = -1;
-    char        *ptr_ip = NULL;
-    const char  *optstring = "i:p:sr:M::S::h";
-    char        *read_type = NULL;
-    char        *ptr_mac = NULL;
-    char        *ptr_sn = NULL;
-    char        *str = NULL;
-    char        send_buf[128];
-    char        str_buf[128];
-    char        json_str[128];
+    int         sockfd = -1;
+    int         type = NO_SPECIFY;
+    char        buf[256];
+    char        *ip = NULL;
+    char        *mac = NULL;
+    char        *sn = NULL;
+    char        json_buf[128];
+    char        mac_value[32];
+    char        sn_value[32];
 
-    printf("at main\n------------\n");
-    while ((ch = getopt_long(argc, argv, optstring, opts, NULL)) != -1)
+    DEBUG("at main\n------------\n");
+    while ((ch = getopt_long(argc, argv, "i:p:srM:S:h", opts, NULL)) != -1)
     {
         switch(ch)
         {
-            case 'i' : ptr_ip = optarg; break;
-            case 'p' : port = atoi(optarg); break;
-            case 's' : send = 1; break;
-            case 'r' : {read_type = optarg; recv = 1; }; break;
-            case 'M' : ptr_mac = optarg; break; 
-            case 'S' : ptr_sn = optarg; break;
-            case 'h' : print_usage(argv[0]); break;
-            default  : break;
-        
+            case 'i' : 
+                ip = optarg; 
+                break;
+            case 'p' : 
+                port = atoi(optarg);
+                break;
+            case 's' : 
+                type = WRITE; 
+                break;
+            case 'r' : 
+                type = READ; 
+                break;
+            case 'M' : 
+                mac = optarg; 
+                break; 
+            case 'S' : 
+                sn = optarg; 
+                break;
+            case 'h' : 
+                print_usage(argv[0]); 
+                break;
+            default  : 
+                break;
         }
     }
 
-    if (!ptr_ip || !port || argc <= 5)
+    if (!ip || !port || (type == NO_SPECIFY))
     {
         print_usage(argv[0]);
         return -1;
     }
 
-    if ((send==0) && (read_type==NULL))
-    {
-        return -1;
-    }
-
-    if ((send==1) && ((ptr_mac==NULL)&&(ptr_sn == NULL)))
+    if ((type==WRITE) && ((mac==NULL)&&(sn == NULL)))
     {
         printf("option '-s' must be used with option '-M' or '-S'\n");
         return -1;
     }
 
-    /*look database record */
-    look_record_database(ptr_mac,ptr_sn);
+    if(type == WRITE)
+    {
+        //printf("strlen(mac) = %d\nstrlen(sn) = %d\n", strlen(mac), strlen(sn));
+        if((mac != NULL) && (strlen(mac) != MAC_LENGTH))
+        {
+            printf("mac length must 17 bytes! \n");
 
+            return -1;
+        }
+        if(mac != NULL)
+        {
+            /* mac must hex,if mac not hex ,program return errno */
+            int     i;
+
+            for(i=0; i<MAC_LENGTH; i++)
+            {
+                if((*(mac+i)) < '0')
+                {
+                    printf("mac format errno!\n");
+                    return -1;
+                }
+                else if(((*(mac + i)) > ':') && ((*(mac + i)) < 'A'))
+                {
+                    printf("mac format errno!\n");
+                    return -1;
+                }
+                else if(((*(mac+i)) > 'F') && ((*(mac+i)) < 'a'))
+                {
+                    printf("mac format errno!\n");
+                    return -1;
+                }
+                else if((*(mac + i)) > 'f')
+                {
+                    printf("mac format errno!\n");
+                    return -1;
+                }
+            }
+        }
+        
+        if((sn != NULL) && (strlen(sn) != SN_LENGTH))
+        {
+            printf("sn length must 10 bytes! \n");
+
+            return -1;
+        }
+
+        /*look database record */
+        printf("now,check record in database! \n");
+        look_record_database(mac,sn);
+    }
 
     /*pack cmd data as JSON format */
-    memset(json_str, 0, sizeof(json_str));
-    if ((pkg_rv = mac_sn_cJSON_pkg(ptr_mac, ptr_sn, send, recv, read_type, json_str)) < 0)
+    memset(json_buf, 0, sizeof(json_buf));
+    if((rv = pack_json_msg(mac, sn, json_buf, type)) < 0)
     {
         return -2;
     }
 
-    if ((rv = connect_server(ptr_ip, port, json_str, recv, &flag)) != 0)
+    if ((rv = connect_server(ip, port, &sockfd)) != 0)
     {
         return -3;
     }
 
-    /*when send MAC or SN to server,set database to save these data that have been sent by client*/
-    printf("flag = %d\n", flag);
+    if ((rv = write(sockfd, json_buf, strlen(json_buf))) <= 0)
+    {
+        printf("write data to server failure:%s\n", strerror(errno));
+
+        close(sockfd);
+        return -3;
+    }
+    printf("send data to server success: %s\n", json_buf);
+    
+    /* 读取服务器端的回复信息 */
+    memset(buf, 0, sizeof(buf));
+    if((rv = read(sockfd, buf, sizeof(buf))) <= 0)
+    {
+        printf("read data from server failure:%s\n", strerror(errno));
+        close(sockfd);
+        return -4;
+    }
+    printf("read data from server: %s,next parse the data!\n", buf);
+
+    /*if specify option '-r'(--read), parse the JSON of MAC and SN from server */ 
+    parse_json_msg(buf, rv, &flag, sn_value, mac_value);
 
     if (flag == 1)
     {
-        /*set database*/
-        set_database(ptr_mac, ptr_sn);
+        printf("record the note(mac,sn) to database! \n");
 
+        /*set database*/
+        set_database(mac, sn);
     }
 
-    printf("---------------\nat main()\n");
+    DEBUG("\n---------------\nat main()\n");
     printf("client exit\n");
     return 0;
 }
 
-void    print_usage(char *progname)
+static void print_usage(char *progname)
 {
     printf("%s usage: \n",progname);
-    printf("-M(--MAC): if you want to send  MAC to server, specify -M(--MAC)\n");
-    printf("-S(--SN): if you want to send SN to server, specify -S(--SN)\n");
-    printf("-s(--send): if you want to send data to server, specify -s(--send)\n");
-    printf("-r(--recv): if you want to receive data from server, specify -r(--recv)\n");
-    printf("-p(--port): sepcify the port that client will to connect server's port\n");
-    printf("-i(--ipaddr): sepcify the ipaddr that client will to connect server's ipaddress\n");
-    printf("-h(--help): print help information\n");
+    printf("-M(--MAC):\tsend MAC to server,must be used with option '-s',specify -M(--MAC)\n");
+    printf("-S(--SN):\tsend SN to server,must be used with option '-s',specify -S(--SN)\n");
+    printf("-s(--send):\tsend MAC or SN to server,must be used with option '-M' or '-s', specify -s(--send)\n");
+    printf("-r(--recv):\trequest to recv MAC and SN from server\n");
+    printf("-p(--port):\tsepcify the port that client will to connect server's port\n");
+    printf("-i(--ipaddr):\tsepcify the ipaddr that client will to connect server's ipaddress\n");
+    printf("-h(--help):\tprint help information\n");
 
     return ;
 }
 
 /*create sockfd to connect server and net io */
-int connect_server(char *ip, int port, char *str, int recv, int *flag)
+static int connect_server(char *ip, int port, int *fd)
 {
     int                     rv = -1;
     int                     sockfd = -1;
     struct sockaddr_in      servaddr;
-    int                     send_rv = -1;
-    int                     recv_rv = -1;
-    char                    recv_buf[128];
 
-    printf("------------------\nat connect_server()");
+    DEBUG("------------------\nat connect_server()");
 
     sockfd = socket(AF_INET, SOCK_STREAM, 0);             //创建套接字
     if (sockfd < 0)
@@ -150,7 +218,7 @@ int connect_server(char *ip, int port, char *str, int recv, int *flag)
 
     if ((rv = connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr))) != 0)
     {
-        printf("%d\n", rv);
+        DEBUG("rv = %d\n", rv);
         printf("connect to server [%s:%d] error:%s\n", ip, port, strerror(errno));
         close(sockfd);
         return -5;
@@ -158,49 +226,17 @@ int connect_server(char *ip, int port, char *str, int recv, int *flag)
     else
     {
         printf("connect to server[%s:%d] successfully\n", ip, port);
-        printf("str = %s\n", str);
-
-        if ((send_rv = write(sockfd, str, strlen(str))) <= 0)
-        {
-            printf("write data to server failure:%s\n", strerror(errno));
-
-            close(sockfd);
-            return -3;
-        }
-        printf("send data to server success!\n");
-
-        /*if send MAC or SN to server success,set flag = 1*/
-        if ((recv==0) && (send_rv>0))
-        {
-            *flag = 1;
-        }
-        
-        if (recv == 1)
-        {
-            memset(recv_buf, 0, sizeof(recv_buf));
-            printf("at recv\n");
-
-            if ((recv_rv=read(sockfd, recv_buf, sizeof(recv_buf))) <= 0)
-            {
-                printf("recv data from server failure:%s\n", strerror(errno));
-                return -4;
-            }
-            printf("recv %d byte data from server success:%s\n", recv_rv, recv_buf);
-
-        }
-
+        *fd = sockfd;
     }
 
     return 0;
 }
 
 /* package mac an sn as JSON format*/
-int mac_sn_cJSON_pkg(char *ptr_mac, char *ptr_sn, int send, int recv, char *read_type,char *json_pkg)
+static int pack_json_msg(char *mac, char *sn, char *json_buf, int type)
 {
-    char    *ptr_json = NULL;
+    char    *json = NULL;
     int     rv = -1;
-
-    printf("-------------------\nat mac_sn_cJSON_pkg\n");
 
     cJSON *root = cJSON_CreateObject();
 
@@ -208,14 +244,12 @@ int mac_sn_cJSON_pkg(char *ptr_mac, char *ptr_sn, int send, int recv, char *read
     {
         return -1;
     }
-
-    printf("send = %d, recv = %d\n", send, recv);
     
-    if (send == 1)
+    if (type == WRITE)
     {
         cJSON_AddStringToObject(root, "cmd", "write");
     }
-    if (recv == 1)
+    if (type == READ )
     {
         cJSON_AddStringToObject(root, "cmd", "read");
     }
@@ -226,50 +260,26 @@ int mac_sn_cJSON_pkg(char *ptr_mac, char *ptr_sn, int send, int recv, char *read
         goto err1;
     }
 
-    if (ptr_mac != NULL)
+    if (mac != NULL)
     {
-        printf("ptr_mac != NULL\n");
-        cJSON_AddStringToObject(data, "mac", (const char *)ptr_mac);
+        DEBUG("mac != NULL\n");
+        cJSON_AddStringToObject(data, "mac", (const char *)mac);
     }
     
-    if (ptr_sn != NULL )
+    if (sn != NULL )
     {
-        printf("ptr_sn != NULL\n");
-        cJSON_AddStringToObject(data, "sn", (const char *)ptr_sn);
-    }
-
-    if (recv == 1)
-    {
-
-        if ((rv=strcmp(read_type,"mac")) == 0)
-        {
-            printf("----------------------debug:at read_type mac\n");
-            cJSON_AddStringToObject(data, "read_type", read_type);
-        }
-        if ((rv=strcmp(read_type,"sn")) == 0)
-        {
-            printf("----------------------debug:at read_type sn\n");
-            cJSON_AddStringToObject(data, "read_type", read_type);
-        }
-
-        /*  
-        if((rv = strncmp(read_type,"mac_sn",strlen("mac_sn"))) == 0)
-        {
-            printf("----------------------debug:at read_type mac_sn\n");
-            cJSON_AddStringToObject(data,"read_type",read_type);
-        }
-        */
+        DEBUG("sn != NULL\n");
+        cJSON_AddStringToObject(data, "sn", (const char *)sn);
     }
 
     cJSON_AddItemToObject(root, "data", data);
-    ptr_json = cJSON_PrintUnformatted(root);
+    json = cJSON_PrintUnformatted(root);
 
-    printf("strlen(ptr_json) = %d\n", (int)strlen(ptr_json));
-    strncpy(json_pkg, ptr_json, strlen(ptr_json));
-    printf("--------debug:ptr_json:%s\n", ptr_json);
-    printf("--------debug:json_pkg:%s\n", json_pkg);
-    printf("--------debug:strlen(json_pkg) = %d\nsizeof(json_pkg) = %d\n",     
-          (int)strlen(json_pkg), (int)sizeof(json_pkg));
+    DEBUG("strlen(json) = %d\n", (int)strlen(json));
+    strncpy(json_buf, json, strlen(json));
+    DEBUG("--------debug:ptr_json:%s\n", json);
+    DEBUG("--------debug:json_pkg:%s\n", json_buf);
+    DEBUG("--------debug:strlen(json_buf) = %d\nsizeof(json_buf) = %d\n",   (int)strlen(json_buf),(int)sizeof(json_buf));
 
     return 0;
 
@@ -278,7 +288,7 @@ err1:
     return -3;
 }
 
-int     set_database(char *ptr_mac, char *ptr_sn)
+static int set_database(char *mac, char *sn)
 {
     int         rc = -1;
     char        *zErrMsg = NULL;
@@ -291,8 +301,7 @@ int     set_database(char *ptr_mac, char *ptr_sn)
     time_t      timep;
     char        time_buf[128];
 
-
-    printf("--------------------\nat set_database\n");
+    DEBUG("\n--------------------\nat set_database\n");
 
     /*get systime */
     time(&timep);
@@ -301,7 +310,7 @@ int     set_database(char *ptr_mac, char *ptr_sn)
     memset(time_buf, 0, sizeof(time_buf));
     snprintf(time_buf, sizeof(time_buf), "%d-%d-%d %d:%d:%d", (time_now -> tm_year + 1900), (time_now -> tm_mon + 1), (time_now -> tm_mday), (time_now -> tm_hour), (time_now -> tm_min), (time_now -> tm_sec));
 
-    if ((ptr_mac != NULL) || (ptr_sn != NULL))
+    if ((mac != NULL) || (sn != NULL))
     {
         rc = sqlite3_open("protool.db", &db);
         if (rc != SQLITE_OK)
@@ -336,21 +345,20 @@ int     set_database(char *ptr_mac, char *ptr_sn)
             }
             else
             {
-                printf("Table created successfully!\n");
+                DEBUG("Table created successfully!\n");
             }
         }
         else
         {
-            printf("the TABLE 'RECORD_PROTOOL' have existed\n");
+            DEBUG("the TABLE 'RECORD_PROTOOL' have existed\n");
         }
 
             memset(sql_buf, 0, sizeof(sql_buf));
             snprintf(sql_buf, sizeof(sql_buf),
-                    "INSERT INTO RECORD_PROTOOL(MAC,SN,TIME) VALUES('%s', '%s', '%s')", 
-                    ptr_mac, ptr_sn, time_buf);
+                    "INSERT INTO RECORD_PROTOOL(MAC,SN,TIME) VALUES('%s', '%s', '%s')", mac, sn, time_buf);
 
             rc = sqlite3_exec(db, sql_buf, callback, 0, &zErrMsg);
-            printf("sql_buf:%s\n", sql_buf);
+            DEBUG("sql_buf:%s\n", sql_buf);
             if (rc != SQLITE_OK)
             {
                 printf("SQL error:%s\n", zErrMsg);
@@ -376,7 +384,7 @@ static  int     callback(void *NotUsed, int argc, char **argv, char **azColName)
     return 0;
 }
 
-int     look_record_database(char *ptr_mac, char *ptr_sn)
+static int look_record_database(char *mac, char *sn)
 {
     int         rc = -1;
     char        *zErrMsg = NULL;
@@ -393,34 +401,34 @@ int     look_record_database(char *ptr_mac, char *ptr_sn)
         printf("open database protool.db success!\n");
     }
 
-    if(ptr_mac != NULL)
+    if(mac != NULL)
     {
         char    *sql_judge_mac = NULL;
 
         sql_judge_mac = "select MAC from RECORD_PROTOOL;";
-        rc = sqlite3_exec(db, sql_judge_mac, print_record_mac, ptr_mac, &zErrMsg);
+        rc = sqlite3_exec(db, sql_judge_mac, print_record_mac, mac, &zErrMsg);
         if (rc != SQLITE_OK)
         {
-            printf("SQL error:%s\n", zErrMsg);
+            DEBUG("SQL error:%s\n", zErrMsg);
             sqlite3_free(zErrMsg);
         }
     }
 
-    if(ptr_sn != NULL)
+    if(sn != NULL)
     {
         char    *sql_judge_sn = NULL;
 
         sql_judge_sn = "select SN from RECORD_PROTOOL;";
-        rc = sqlite3_exec(db, sql_judge_sn, print_record_sn, ptr_sn, &zErrMsg);
+        rc = sqlite3_exec(db, sql_judge_sn, print_record_sn, sn, &zErrMsg);
         if (rc != SQLITE_OK)
         {
-            printf("SQL error:%s\n", zErrMsg);
+            DEBUG("SQL error:%s\n", zErrMsg);
             sqlite3_free(zErrMsg);
         }
     }
 }
 
-int print_record_mac(void *params, int n_column, char **column_value, char **column_name)
+static int print_record_mac(void *params, int n_column, char **column_value, char **column_name)
 {
     int i;
     int rv = -1;
@@ -428,7 +436,7 @@ int print_record_mac(void *params, int n_column, char **column_value, char **col
 
     //printf("\t%s\n",(char *)params);
 
-    printf("n_column = %d\n",n_column);
+    DEBUG("n_column = %d\n",n_column);
     for (i=0; i<n_column; i++)
     {
         //printf("\t%s\n",column_name[i]);
@@ -452,7 +460,7 @@ int print_record_mac(void *params, int n_column, char **column_value, char **col
     return 0;
 }
 
-int print_record_sn(void *params, int n_column, char **column_value, char **column_name)
+static int print_record_sn(void *params, int n_column, char **column_value, char **column_name)
 {
     int i;
     int rv = -1;
@@ -480,5 +488,61 @@ int print_record_sn(void *params, int n_column, char **column_value, char **colu
         exit(0);
     }
 
+    return 0;
+}
+
+static int parse_json_msg(char *buf, int size, int *type, char *sn_value, char *mac_value )
+{
+    char    *ptr_mac_value = NULL;
+    char    *ptr_sn_value = NULL;
+    char    *ptr_cmd_value = NULL;
+    cJSON   *root = NULL;
+
+    cJSON *sys_root = cJSON_Parse(buf);
+    if (NULL == sys_root)
+    {
+        printf("cJSON format data parse failure!\n");
+        goto err1;
+    }
+
+    cJSON *cmd = cJSON_GetObjectItem(sys_root, "cmd");
+
+    if (NULL == cmd)
+    {
+        printf("cJSON get object item failure!\n");
+        goto err2;
+    }
+    ptr_cmd_value = cmd->valuestring;
+
+    cJSON *data = cJSON_GetObjectItem(sys_root, "data");
+    if (NULL == data)
+    {
+        goto err2;
+    }
+
+    cJSON *sn = cJSON_GetObjectItem(data, "sn");
+    if (sn != NULL)
+    {
+        ptr_sn_value = sn->valuestring;
+    }
+
+    cJSON *mac = cJSON_GetObjectItem(data, "mac");
+    if (mac != NULL)
+    {
+        ptr_mac_value = mac->valuestring;
+    }
+
+    printf("cmd: \t%s\nsn: \t%s\nmac: \t%s\n", ptr_cmd_value, ptr_sn_value, ptr_mac_value);
+
+    if((strncmp(ptr_cmd_value, "reply_write", strlen("reply_write"))) == 0)
+    {
+        *type = 1;
+    }
+
+err2:
+    cJSON_Delete(sys_root);
+
+err1:
+    //free(str);
     return 0;
 }
