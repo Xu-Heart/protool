@@ -11,7 +11,6 @@
  *           ChangeLog:  1, Release initial version on "2019年07月18日 9时50分03秒"
  *
  ************************************************************************************/
-
 #include"protoold.h"
 
 static int  g_stop = 0;
@@ -21,17 +20,25 @@ int main(int argc, char **argv)
 	int                  rv = -1;
 	int                  port = 0;
 	int                  ch;
-    int                  s_cre_sock = -1;
-    int                  read = 0;
-    int                  write = 0;
+    int                  create_sock = -1;
+    int                  Read = 0;
+    int                  Write = 0;
+    int                  sockfd = -1;
+    int                  clifd = -1;
+    int                  type = -1;
     int                  log_fd = -1;
-    char                 *ptr_mac = NULL;
-    char                 *ptr_mac_backup = NULL;
-    char                 *ptr_sn = NULL;
+    char                 *mac = NULL;
+    char                 *sn = NULL;
+    char                 mac_backup[20];
+    char                 *which = NULL;
+    char                 buf[128];
+    char                 json[128];
+    char                 sn_value[32];
+    char                 mac_value[32];
+    char                 sn_buf[32];
+    char                 mac_buf[32];
+    struct sockaddr_in   cliaddr;
 	socklen_t            len;
-    char                 *optstring = "p:wr:M:S:";
-    char                 *read_t = NULL;
-    char                 r_buf[20];
 
     struct option        opts[] = {
 		{"port", required_argument, NULL, 'p'},
@@ -43,23 +50,23 @@ int main(int argc, char **argv)
 		{NULL, 0, NULL, 0}
 	};
 
-	while ((ch=getopt_long(argc, argv, optstring, opts, NULL)) != -1) 
+	while ((ch=getopt_long(argc, argv, "p:wr:M:S:", opts, NULL)) != -1) 
 	{
 		switch(ch)
 		{
             case 'p' : port = atoi(optarg); break;
-            case 'r' : {read = 1; read_t = optarg; }; break;
-            case 'w' : write = 1; break;
-            case 'M' : ptr_mac = optarg; break;
-            case 'S' : ptr_sn = optarg; break;
+            case 'r' : {Read = 1; which = optarg; }; break;
+            case 'w' : Write = 1; break;
+            case 'M' : mac = optarg; break;
+            case 'S' : sn = optarg; break;
 			case 'h' : print_usage(argv[0]); break;
             default  : break;
 		}
 	}
 
-    ptr_mac_backup = ptr_mac;
+    DEBUG("-------------\n");
 
-	if ((!port) && (!write) && (!read))
+	if ((!port) && (!Write) && (!Read))
 	{
 		print_usage(argv[0]);
 		return -1;
@@ -67,57 +74,67 @@ int main(int argc, char **argv)
 
     if(port == 0)
     {
-        if(read == 1)
+        if(Read == 1)
         {
-            if((strncmp("mac", read_t, 3) == 0))
+            memset(buf, 0, sizeof(buf));
+
+            if((strncmp("mac", which, 3) == 0))
             {
-                if((read_mac(r_buf)) != 0)
+                if((read_mac(buf, MAC_BYTES)) != 0)
                 {
                     printf("read mac failure!\n");
                     return -1;
                 }
-                printf("read mac OK!\nmac: %s\n", r_buf);
+                DEBUG("read mac OK!\nmac: %s\n", buf);
+                printf("mac=%s\n",buf);
             }
 
-            if((strncmp("sn", read_t, 2)) == 0) 
+            if((strncmp("sn", which, 2)) == 0) 
             {
-                if((read_sn(r_buf)) != 0)
+                if((read_sn(buf, SN_BYTES)) != 0)
                 {
-                    printf("read sn failure!\n");
+                    printf("read sn failure: %s\n", strerror(errno));
                     return -2;
                 }
-                printf("sn: %s\n", r_buf);
+                printf("sn=%s\n", buf);
             }
         }
         
-        if (write == 1)
+        if (Write == 1)
         {
-            if (ptr_mac != NULL)
+            if (mac != NULL)
             {
-                if((write_mac(ptr_mac)) != 0)
+                printf("999999\n");
+                memset(mac_backup, 0, sizeof(mac_backup));
+                strncpy(mac_backup, mac, strlen(mac));
+
+                if((write_mac(mac, strlen(mac))) != 0)
                 {
                     printf("write mac failure!\n");
                     return -3;
                 }
             }
 
-            if (ptr_sn != NULL)
+            if (sn != NULL)
             {
-                if((write_sn(ptr_sn)) != 0)
+                if((write_sn(sn, strlen(sn))) != 0)
                 {
                     printf("write sn failure!\n");
                     return -4;
                 }
             }
         }
+
         return 0;
     }
 
     /* if the program as the socket server,run in background */
-    log_fd = open("protoold.log",O_RDWR|O_CREAT,0666);
+    /*  
+    log_fd = open("protoold.log", O_CREAT|O_RDWR,0666);
 
     if (log_fd > 0)
     {
+        printf("--------------\n");
         dup2(log_fd, STDOUT_FILENO);
         dup2(log_fd, STDERR_FILENO);
         daemon(1,1);
@@ -127,16 +144,101 @@ int main(int argc, char **argv)
         printf("open file failure: %s\n", strerror(errno));
         return -3;
     }
+    */
 
-    if ((s_cre_sock=server_create_sock(port, len)) < 0)
+    /* srever create socket */
+    if (( rv = server_create_sock(port, &sockfd)) < 0)
     {
         return -ERR_CRE_SOCK;
+    }
+
+    while (!g_stop)
+    {
+        printf("Start accept new client incoming...\n");
+
+        clifd = accept(sockfd, (struct sockaddr *)&cliaddr, &len);
+        if (clifd < 0)
+        {
+            printf("Accept new client failure: %s\n", strerror(errno));
+            return -4;
+        }
+        printf("Accept new client[%s:%d] successfully\n", inet_ntoa(cliaddr.sin_addr),
+                ntohs(cliaddr.sin_port));
+
+        memset(buf, 0, sizeof(buf));
+        memset(sn_value, 0, sizeof(sn_value));
+        memset(mac_value, 0, sizeof(mac_value));
+        memset(json, 0, sizeof(json));
+        memset(mac_buf, 0,sizeof(mac_buf));
+        memset(sn_buf, 0,sizeof(sn_buf));
+
+        /* server and client start communication */
+        if((rv = read(clifd, buf, sizeof(buf))) <= 0)
+        {
+            close(clifd);
+            continue;
+        }
+
+        /* server parse JSON format data from client */
+        parse_json_msg(buf, rv, &type, sn_value, mac_value);
+
+        /* if client command to write to eeprom, judge write "MAC" or "SN"*/
+        if(type == WRITE)
+        {
+            if((sn_value != NULL) && (strlen(sn_value)) == 10)
+            {
+                if((write_sn(sn_value, strlen(sn_value))) < 0)
+                {
+                    strncpy(sn_buf, "NAK", strlen("NAK"));
+                }
+                else
+                {
+                    strncpy(sn_buf, "ACK", strlen("ACK"));
+                }
+            }
+
+            if(((*(mac_value)) != 0))
+            {
+                if((write_mac(mac_value, strlen(mac_value))) < 0)
+                {
+                    strncpy(mac_buf, "NAK", strlen("NAK"));
+                }
+                else
+                {
+                    strncpy(mac_buf, "ACK", strlen("ACK"));
+                }
+            }
+        }
+        else
+        {
+            /* if client command to read ,judge read "MAC" or "SN" */
+            if((read_sn(sn_buf, SN_BYTES)) < 0)
+            {
+                printf("read sn failure:%s\n", strerror(errno));
+
+            }
+            if((read_mac(mac_buf, MAC_BYTES)) < 0)
+            {
+                printf("read mac failure:%s\n", strerror(errno));
+            }
+        }
+
+        /* result of read or write to pack as JSON format */
+        pack_json_msg(mac_buf, sn_buf, json, type);
+
+        /*result of write or read to reply client */ 
+        if((rv = write(clifd, json, strlen(json))) <= 0)
+        {
+            printf("write to client failure: %s\n", strerror(errno));
+            close(clifd);
+        }
+        printf("write to client: %s\n", json);
     }
 
     return 0;
 }
 
-static int server_create_sock(int port, socklen_t len)
+static int server_create_sock(int port, int *fd)
 {
     int                     sockfd = -1;
     int                     on = 1;
@@ -148,6 +250,7 @@ static int server_create_sock(int port, socklen_t len)
     char                    buf[128];
     char                    *str = NULL;
     char                    json[128];
+    socklen_t               len;
     struct sockaddr_in      servaddr;
     struct sockaddr_in      cliaddr;
 
@@ -177,61 +280,8 @@ static int server_create_sock(int port, socklen_t len)
 
     listen(sockfd, 13);
     printf("listening on port %d\n", port);
-    
-    while (!g_stop)
-    {
-        printf("Start accept new client incoming...\n");
+    *fd = sockfd;
 
-        clifd = accept(sockfd, (struct sockaddr *)&cliaddr, &len);
-        if (clifd < 0)
-        {
-            printf("Accept new client failure: %s\n", strerror(errno));
-            return -4;
-        }
-        printf("Accept new client[%s:%d] successfully\n", inet_ntoa(cliaddr.sin_addr),ntohs(cliaddr.sin_port));
-
-        memset(buf, 0, sizeof(buf));
-        rv = read(clifd, buf, sizeof(buf));
-        if (rv < 0)
-        {
-            printf("Read data from client sockfd[%d] failure: %s\n", clifd, strerror(errno));
-            close(clifd);
-        }
-        else if (rv == 0)
-        {
-            printf("Socket[%d] get disconnected\n", clifd);
-            close(clifd);
-        }
-        else if (rv > 0)
-        {
-            printf("Read %d bytes data from client: %s\n", rv, buf);
-
-            /*parse cJSON format data*/
-            printf("before cJSON parse\n");
-            memset(json, 0, sizeof(json));
-
-            parse_rv = mac_sn_cJSON_parse(buf, json, sizeof(json));
-            if ((parse_rv < 0))
-            {
-                close(clifd);
-                continue;
-            }
-            if (parse_rv == SEND_CLI)
-            {
-                printf("%s\n", json);
-
-                if ((w_cli_rv = write(clifd, json, strlen(json))) <= 0)
-                {
-                    printf("send data to client failure:%s\n", strerror(errno));
-                    return -5;
-                }
-                printf("send data to client success!\n");
-            }
-
-            close(clifd);
-        }
-    }
-    close(sockfd);
     return 0;
 }
 
@@ -250,21 +300,18 @@ static void print_usage(char *progname)
 
 /*parse JSON format data from client*/
 /* if success ,return 0,else,return negative */
-static int mac_sn_cJSON_parse(char *str, char *json, int size)
+static int parse_json_msg(char *buf, int size, int *type, char *sn_value, char *mac_value )
 {
     char    *ptr_mac_value = NULL;
     char    *ptr_sn_value = NULL;
     char    *ptr_cmd_value = NULL;
-    char    *ptr_read_type = NULL;
-    char    cmd_buf[8];
-    char    sn_buf[16];
-    char    mac_buf[20];
+    char    *ptr_whichype = NULL;
     int     strcmp_rv = -1;
     int     w_sn_rv = -1;
     int     w_mac_rv = -1;
     cJSON   *root = NULL;
 
-    cJSON *sys_root = cJSON_Parse(str);
+    cJSON *sys_root = cJSON_Parse(buf);
     if (NULL == sys_root)
     {
         printf("cJSON format data parse failure!\n");
@@ -277,10 +324,8 @@ static int mac_sn_cJSON_parse(char *str, char *json, int size)
         printf("cJSON get object item failure!\n");
         goto err2;
     }
-    ptr_cmd_value = cmd_buf;
     ptr_cmd_value = cmd->valuestring;
     
-
     cJSON *data = cJSON_GetObjectItem(sys_root, "data");
     if (NULL == data)
     {
@@ -290,109 +335,37 @@ static int mac_sn_cJSON_parse(char *str, char *json, int size)
     cJSON *sn = cJSON_GetObjectItem(data, "sn");
     if (sn != NULL)
     {
-        ptr_sn_value = sn_buf;
         ptr_sn_value = sn->valuestring;
     }
 
     cJSON *mac = cJSON_GetObjectItem(data, "mac");  
     if (mac != NULL)
     {
-        ptr_mac_value = mac_buf;
         ptr_mac_value = mac->valuestring;
     }      
 
-    cJSON *read_type = cJSON_GetObjectItem(data, "read_type");
-    if (read_type != NULL)
-    {
-        ptr_read_type = read_type->valuestring;
-    }
-    
-    printf("cmd = %s, sn = %s, mac = %s, read_type = %s\r\n", ptr_cmd_value, ptr_sn_value, ptr_mac_value, ptr_read_type);
+    printf("cmd = %s, sn = %s, mac = %s\n", ptr_cmd_value, ptr_sn_value, ptr_mac_value, ptr_whichype);
 
     /*justice cmd is "write" or "read"*/
     if (!strncmp(ptr_cmd_value, "write", strlen("write")))
     {
+        *type = WRITE;
+
         if (ptr_sn_value != NULL)
         {
-           if ((w_sn_rv =  write_sn(ptr_sn_value)) < 0)
-           {
-               return -ERR_W_SN; 
-           }
+            strncpy(sn_value, ptr_sn_value, strlen(ptr_sn_value));
         }
 
         if (ptr_mac_value != NULL)
         {
-            if ((w_mac_rv = write_mac(ptr_mac_value)) < 0)
-            {
-                return -ERR_W_MAC;
-            }
+            strncpy(mac_value, ptr_mac_value, strlen(ptr_mac_value));
         }
     }
 
     /*when cmd is read,read mac and sn from eeprom*/
     if (!strncmp(ptr_cmd_value, "read", strlen("read")))
     {
-        char    r_sn_buf[11];
-        char    r_mac_buf[7];
-        char    str_mac[18];
-        char    *str_pkg = NULL;
-        char    json_buf[128];
-        char    send_buf[64];   
-        int     send_rv = -1;
-        int     rv_mac  = -1;
-        int     rv_sn = -1;
-        int     json_rv = -1;
-
-        printf("ptr_read_type = %s\n", ptr_read_type);
-
-        memset(r_sn_buf, 0, sizeof(r_sn_buf));
-        memset(r_mac_buf, 0, sizeof(r_mac_buf));
-        memset(str_mac, 0, sizeof(str_mac));
-        memset(json_buf, 0, sizeof(json_buf));
-
-        if (ptr_read_type != NULL)
-        {
-            /*read SN from eeprom*/
-            if (strncmp(ptr_read_type, "sn", strlen(ptr_read_type)) == 0)
-            {
-                if ((rv_sn = read_sn(r_sn_buf)) == 0)
-                {
-                    printf("%s\n", r_sn_buf);
-                }
-                else if (rv_sn < 0)
-                {
-                    printf("read sn failure:%s\n", strerror(errno));
-                }
-            }
-
-            /* read MAC from eeprom */
-            if (strncmp(ptr_read_type, "mac", strlen(ptr_read_type)) == 0)
-            {
-                if ((rv_mac = read_mac(str_mac)) == 0)
-                {
-                    printf("\nread mac OK!mac: %s\n", str_mac);
-                }
-                else if (rv_mac < 0)
-                {
-                    printf("read MAC failure:%s\n", strerror(errno));
-                }
-            }
-
-            /* package data as JSON format */
-            if ((json_rv = mac_sn_cJSON_pkg(str_mac, r_sn_buf, json_buf)) < 0)
-            {
-                return -ERR_CJSON_PKG;
-            }
-            printf("strlen(json_buf):%d\n", strlen(json_buf));
-            strncpy(json, json_buf, strlen(json_buf));
-
-            return SEND_CLI;
-        }
-        else
-        {
-            printf("client don't specify the argument of '-r'\n");
-            return -1;
-        }
+        *type = READ;
     }
 
 err2:
@@ -404,44 +377,55 @@ err1:
 }
 
 /* the function write mac to eeprom */
-static int write_mac(char *mac_value)
+static int write_mac(char *mac_value, int bytes)
 {
     int             i = 0;
     int             offset = -1;
     int             fd = -1;
     int             rv = -1;
-    int             w_mac_rv = -1;
-    char            *mac_value_bake = NULL;
+    char            mac_value_bake[32];
     char            *ptr = NULL;
+    char            mac_ini_buf[MAC_INI_LENGTH];
     unsigned char   buf[MAC_SIZE];
 
-    mac_value_bake = mac_value;
+
+    memset(mac_value_bake, 0, sizeof(mac_value_bake));
+    if(mac_value != NULL)
+    {
+        strncpy(mac_value_bake, mac_value, strlen(mac_value));
+    }
     //printf("mac_value_bake: %s\n", mac_value_bake);
+    printf("mac_value: %s\n", mac_value);
       
     for (i=0; i<6; i++)
     {
         buf[i] = strtol(mac_value, &ptr, 16);
         mac_value += 3;
     }
-    //printf("debug:%02x\n", buf[0]);
+    printf("debug:%02x\n", buf[0]);
     
-    if ((w_mac_rv = eeprom_write(buf,MAC_OFFSET)) < 0)
+    if ((rv = eeprom_write(buf,MAC_OFFSET)) < 0)
     {
         return -ERR_EEPROM_W;
     }
     printf("write mac to eeprom success!\n");
 
-    /*update the file "/etc/eeprom/MAC" */
-    if ((update_file(PATHNAME_MAC, mac_value_bake)) != 0)
+    /*update the file "/etc/.hwinfo" */
+    /*  
+    memset(mac_ini_buf, 0,sizeof(mac_ini_buf));
+    snprintf(mac_ini_buf, MAC_INI_LENGTH, "mac=%s", mac_value_bake);
+    printf("%s\n", mac_ini_buf);
+    if ((update_file(PATHNAME_HWINFO, mac_ini_buf)) != 0)
     {
         printf("update file failure!\n");
     }
+    */
 
     return 0;
 }
 
 /* this function write sn to eeprom ,if success,return 0,else return nagative */
-static int write_sn(char *sn_value)
+static int write_sn(char *sn_value, int bytes)
 {
     int     rv = -1;
     int     offset = -1;
@@ -454,48 +438,50 @@ static int write_sn(char *sn_value)
     printf("write sn to eeprom success!\n");
 
     /* update the file '/etc/eeprom/SN' */
-    if ((update_file(PATHNAME_SN, sn_value)) != 0)
+    /*  
+    memset(sn_ini_buf, 0,sizeof(sn_ini_buf));
+    snprintf(sn_ini_buf, SN_INI_LENGTH, "sn=%s", sn_value);
+    if ((update_file(PATHNAME_HWINFO, sn_ini_buf)) != 0)
     {
-        printf("update file '/etc/eeprom/sn' failure!\n");
+        printf("update file '/etc/.hwinfo' failure!\n");
     }
+    */
 
     return 0;
 }
 
 /* this function read SN from eeprom */
-static int read_sn(char *sn)
+static int read_sn(char *sn, int sn_length)
 {
-    int         sn_length = 11;
     int         rv = -1;
 
     if ((rv = eeprom_read(sn, sn_length, SN_OFFSET)) < 0)
     {
-        return ERR_EEPROM_R;
+        return -ERR_EEPROM_R;
     }
-    printf("read sn ok!\n");
+    DEBUG("read sn ok!%s\n",sn);
 
     return 0;
 }
 
-static int read_mac(char *mac)
+static int read_mac(char *mac, int bytes)
 {
-    int         mac_length = 7;
     int         rv = -1;
     char        buf[7];
 
-    if ((rv = eeprom_read(buf, mac_length, MAC_OFFSET)) < 0)
+    if ((rv = eeprom_read(buf, 7, MAC_OFFSET)) < 0)
     {
         return -ERR_EEPROM_R;
     }
 
     /* convert hex MAC to string MAC */
-    snprintf(mac, 18, "%02x:%02x:%02x:%02x:%02x:%02x",
+    snprintf(mac, bytes, "%02x:%02x:%02x:%02x:%02x:%02x",
             buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]);
 
     return 0;
 }
 
-int     mac_sn_cJSON_pkg(char *mac_buf, char *sn_buf, char *json_str)
+int     pack_json_msg(char *mac_buf, char *sn_buf, char *json, int type)
 {
     char    *json_pkg = NULL;
     int     json_rv = -1;
@@ -506,7 +492,15 @@ int     mac_sn_cJSON_pkg(char *mac_buf, char *sn_buf, char *json_str)
     {
         return -1;
     }
-    cJSON_AddStringToObject(root, "cmd", "send_cli");
+    
+    if(type == WRITE)
+    {
+        cJSON_AddStringToObject(root, "cmd", "reply_write");
+    }
+    else
+    {
+        cJSON_AddStringToObject(root, "cmd", "reply_read");
+    }
 
     cJSON *data = cJSON_CreateObject();
     if (NULL == data)
@@ -532,14 +526,14 @@ int     mac_sn_cJSON_pkg(char *mac_buf, char *sn_buf, char *json_str)
     cJSON_AddItemToObject(root, "data", data);
     json_pkg = cJSON_PrintUnformatted(root);
 
-    if (strncpy(json_str, json_pkg, strlen(json_pkg)) == NULL)
+    if (strncpy(json, json_pkg, strlen(json_pkg)) == NULL)
     {
         return -2;
     }
 
     printf("json_pkg: %s\n", json_pkg);
     printf("strlen(json_pkg) = %d\n", strlen(json_pkg));
-    printf("json_str: %s\n", json_str);
+    printf("json: %s\n", json);
 
     return 0;
 
@@ -549,6 +543,7 @@ err1:
 
 }
 
+/*  
 int update_file(char *file, char *value)
 {
     int     fd = -1;
@@ -556,7 +551,7 @@ int update_file(char *file, char *value)
     //printf("file: %s\n", file);
     //printf("value: %s\n", value);
 
-    fd = open(file, O_RDWR | O_CREAT | O_TRUNC, 0666);
+    fd = open(file, O_RDWR | O_CREAT, 0666);
 
     if(fd < 0)
     {
@@ -564,14 +559,37 @@ int update_file(char *file, char *value)
         return -1;
     }
 
-    lseek(fd, 0, SEEK_SET);
-
-    if((write(fd, value, strlen(value))) <= 0)
+    printf("strlen(value) =%d\n",strlen(value));
+    if(strlen(value) == 21)
     {
-        printf("write data to file '%s' failure: %s\n", file, strerror(errno));
-        return -2;
+        lseek(fd, 0, SEEK_SET);
+        if((write(fd, value, strlen(value))) <= 0)
+        {
+            printf("write data to file '%s' failure: %s\n", file, strerror(errno));
+            return -2;
+        }
+        lseek(fd,21,SEEK_SET);
+        write(fd,"\n",1);
+        printf("update the file '%s' successful!\n", file);
     }
-    printf("update the file '%s' successful!\n", file);
+    else if(strlen(value) == 13)
+    {
+        lseek(fd, 22, SEEK_SET);
+        if((write(fd, value, strlen(value))) <= 0)
+        {           
+            printf("write data to file '%s' failure: %s\n", file, strerror(errno));
+            return -2;
+        }     
+        lseek(fd,35, SEEK_SET);
+        write(fd,"\n",1);
+         printf("update the file '%s' successful!\n", file);
+
+    }
+    else
+    {
+        printf("MAC or SN legth is error!\n");
+    }
 
     return 0;
 }
+*/
